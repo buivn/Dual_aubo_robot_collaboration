@@ -33,6 +33,7 @@
 
 namespace aubo_driver {
 
+// std::string robotname = "robot1";
 std::string AuboDriver::joint_name_[ARM_DOF] = {"shoulder_joint","upperArm_joint","foreArm_joint","wrist1_joint","wrist2_joint","wrist3_joint"};
 
 AuboDriver::AuboDriver(int num = 0):buffer_size_(400),io_flag_delay_(0.02),data_recieved_(false),data_count_(0),real_robot_exist_(false),emergency_stopped_(false),protective_stopped_(false),normal_stopped_(false),
@@ -82,6 +83,103 @@ AuboDriver::AuboDriver(int num = 0):buffer_size_(400),io_flag_delay_(0.02),data_
     teach_subs_ = nh_.subscribe("teach_cmd", 10, &AuboDriver::teachCallback,this);
     moveAPI_subs_ = nh_.subscribe("moveAPI_cmd", 10, &AuboDriver::AuboAPICallback, this);
     controller_switch_sub_ = nh_.subscribe("/aubo_driver/controller_switch", 10, &AuboDriver::controllerSwitchCallback, this);
+    // ROS_INFO("This construction always start first");
+}
+
+AuboDriver::AuboDriver(std::string robotname, int num = 0):buffer_size_(400),io_flag_delay_(0.02),data_recieved_(false),data_count_(0),real_robot_exist_(false),emergency_stopped_(false),protective_stopped_(false),normal_stopped_(false),
+    controller_connected_flag_(false),start_move_(false),control_mode_ (aubo_driver::SendTargetGoal),rib_buffer_size_(0),jti(ARM_DOF,1.0/200),jto(ARM_DOF),collision_class_(6)
+{
+    axis_number_ = 6 + num;
+    /** initialize the parameters **/
+    for(int i = 0; i < axis_number_; i++)
+    {
+        current_joints_[i] = 0;
+        target_point_[i] = 0;
+        if(i < 3)
+        {
+            joint_ratio_[i] = BIG_MODULE_RATIO;
+        }
+        else if(i < 6)
+        {
+            joint_ratio_[i] = SMALL_MODULE_RATIO;
+        }
+        else
+        {
+            joint_ratio_[i] = 2 * M_PI / 10.05309632; //adjust by the real application
+        }
+        jti.maxVelocity[i] = VMAX * joint_ratio_[i];
+        jti.maxAcceleration[i] = AMAX * joint_ratio_[i];
+        jti.maxJerk[i] = JMAX * joint_ratio_[i];
+    }
+    rs.robot_controller_ = ROBOT_CONTROLLER;
+    rib_status_.data.resize(3);
+
+    /** publish messages **/
+    std::string joint_states = robotname+"/joint_states";
+    // joint_states_pub_ = nh_.advertise<sensor_msgs::JointState>("joint_states", 300);
+    joint_states_pub_ = nh_.advertise<sensor_msgs::JointState>(joint_states, 300);
+    std::string feedback_states = robotname+"/feedback_states";
+    // joint_feedback_pub_ = nh_.advertise<control_msgs::FollowJointTrajectoryFeedback>("feedback_states", 100);
+    joint_feedback_pub_ = nh_.advertise<control_msgs::FollowJointTrajectoryFeedback>(feedback_states, 100);
+    
+    std::string aubodriver_realpose = "/"+robotname+"/aubo_driver/real_pose";
+    // joint_target_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/aubo_driver/real_pose", 50);
+    joint_target_pub_ = nh_.advertise<std_msgs::Float32MultiArray>(aubodriver_realpose, 50);
+    
+    std::string robot_status = robotname+"/robot_status";
+    // robot_status_pub_ = nh_.advertise<industrial_msgs::RobotStatus>("robot_status", 100);
+    robot_status_pub_ = nh_.advertise<industrial_msgs::RobotStatus>(robot_status, 100);
+
+    std::string aubodriver_iostates = "/"+robotname+"/aubo_driver/io_states";
+    // io_pub_ = nh_.advertise<aubo_msgs::IOState>("/aubo_driver/io_states", 10);
+    io_pub_ = nh_.advertise<aubo_msgs::IOState>(aubodriver_iostates, 10);
+
+    std::string aubodriver_ribstatus = "/"+robotname+"/aubo_driver/rib_status";
+    // rib_pub_ = nh_.advertise<std_msgs::Int32MultiArray>("/aubo_driver/rib_status", 100);
+    rib_pub_ = nh_.advertise<std_msgs::Int32MultiArray>(aubodriver_ribstatus, 100);
+
+    std::string aubodriver_canceltrajectory = "/"+robotname+"/aubo_driver/cancel_trajectory";
+    // cancle_trajectory_pub_ = nh_.advertise<std_msgs::UInt8>("aubo_driver/cancel_trajectory",100);
+    cancle_trajectory_pub_ = nh_.advertise<std_msgs::UInt8>(aubodriver_canceltrajectory,100);
+
+    std::string aubodriver_setio = "/"+robotname+"/aubo_driver/set_io";
+    // io_srv_ = nh_.advertiseService("/aubo_driver/set_io",&AuboDriver::setIO, this);
+    io_srv_ = nh_.advertiseService(aubodriver_setio, &AuboDriver::setIO, this);
+
+    std::string aubodriver_getik = "/"+robotname+"/aubo_driver/get_ik";
+    // ik_srv_ = nh_.advertiseService("/aubo_driver/get_ik",&AuboDriver::getIK, this);
+    ik_srv_ = nh_.advertiseService(aubodriver_getik, &AuboDriver::getIK, this);
+
+    std::string aubodriver_getfk = "/"+robotname+"/aubo_driver/get_fk";
+    // fk_srv_ = nh_.advertiseService("/aubo_driver/get_fk",&AuboDriver::getFK, this);
+    fk_srv_ = nh_.advertiseService(aubodriver_getfk, &AuboDriver::getFK, this);
+
+    /** subscribe topics **/
+    std::string trajectory_execution_event = "/"+robotname+"/trajectory_execution_event";
+    // trajectory_execution_subs_ = nh_.subscribe("trajectory_execution_event", 10, &AuboDriver::trajectoryExecutionCallback,this);
+    trajectory_execution_subs_ = nh_.subscribe(trajectory_execution_event, 10, &AuboDriver::trajectoryExecutionCallback,this);
+    
+    std::string robot_control = "/"+robotname+"/robot_control";
+    // robot_control_subs_ = nh_.subscribe("robot_control", 10, &AuboDriver::robotControlCallback,this);
+    robot_control_subs_ = nh_.subscribe(robot_control, 10, &AuboDriver::robotControlCallback,this);
+
+    std::string moveItController_cmd = "/"+robotname+"/moveItController_cmd";
+    // moveit_controller_subs_ = nh_.subscribe("moveItController_cmd", 2000, &AuboDriver::moveItPosCallback,this);
+    moveit_controller_subs_ = nh_.subscribe(moveItController_cmd, 2000, &AuboDriver::moveItPosCallback,this);
+
+    std::string teach_cmd = "/"+robotname+"/teach_cmd";
+    // teach_subs_ = nh_.subscribe("teach_cmd", 10, &AuboDriver::teachCallback,this);
+    teach_subs_ = nh_.subscribe(teach_cmd, 10, &AuboDriver::teachCallback,this);
+
+    std::string moveAPI_cmd = "/"+robotname+"/moveAPI_cmd";
+    // moveAPI_subs_ = nh_.subscribe("moveAPI_cmd", 10, &AuboDriver::AuboAPICallback, this);
+    moveAPI_subs_ = nh_.subscribe(moveAPI_cmd, 10, &AuboDriver::AuboAPICallback, this);
+
+    std::string aubodriver_controllerswitch = "/"+robotname+"/aubo_driver/controller_switch";
+    // controller_switch_sub_ = nh_.subscribe("/aubo_driver/controller_switch", 10, &AuboDriver::controllerSwitchCallback, this);
+    controller_switch_sub_ = nh_.subscribe(aubodriver_controllerswitch, 10, &AuboDriver::controllerSwitchCallback, this);
+    // ROS_INFO("This construction always start first");
+
 }
 
 AuboDriver::~AuboDriver()
@@ -171,6 +269,7 @@ void AuboDriver::timerCallback(const ros::TimerEvent& e)
         {
             ROS_INFO("There is no to the robot controller!");
         }
+        // ROS_INFO("Just print out to check 11111111111111111111 ......");
     }
     else if(control_mode_ == aubo_driver::SendTargetGoal)
     {
@@ -208,6 +307,7 @@ void AuboDriver::timerCallback(const ros::TimerEvent& e)
             }
             joint_target_pub_.publish(joints);
         }
+        // ROS_INFO("Just print out to check ......");
     }
 }
 
@@ -512,7 +612,49 @@ bool AuboDriver::connectToRobotController()
 
     std::string s;
     ros::param::get("/aubo_driver/server_host", s); //The server_host should be corresponding to the robot controller setup.
-    server_host_ = (s=="")? "127.0.0.1" : s;
+    server_host_ = (s=="")? "192.168.1.101" : s;
+    std::cout<<"server_host:"<<server_host_<<std::endl;
+
+    /** log in ***/
+    int max_link_times = 5;
+    int count = 0;
+    do {
+        count++;
+        ret1 = robot_send_service_.robotServiceLogin(server_host_.c_str(), server_port, "aubo", "123456");
+    }while(ret1 != aubo_robot_namespace::InterfaceCallSuccCode && count < max_link_times);
+
+    if(ret1 == aubo_robot_namespace::InterfaceCallSuccCode)
+    {
+        ret2 = robot_receive_service_.robotServiceLogin(server_host_.c_str(), server_port, "aubo", "123456");
+        controller_connected_flag_  = true;
+        std::cout<<"login success."<<std::endl;
+        /** 接口调用: 获取真实臂是否存在 **/
+        ret2 = robot_receive_service_.robotServiceGetIsRealRobotExist(real_robot_exist_);
+        if(ret2 == aubo_robot_namespace::InterfaceCallSuccCode)
+        {
+            (real_robot_exist_)? std::cout<<"real robot exist."<<std::endl:std::cout<<"real robot doesn't exist."<<std::endl;
+            //power on the robot.
+        }
+//        ros::param::set("/aubo_driver/robot_connected","1");
+        return true;
+    }
+    else
+    {
+//        ros::param::set("/aubo_driver/robot_connected","0");
+        controller_connected_flag_  = false;
+        std::cout<<"login failed."<<std::endl;
+        return false;
+    }
+}
+
+bool AuboDriver::connectToRobotController(std::string s)
+{
+    int ret1 = aubo_robot_namespace::InterfaceCallSuccCode;
+    int ret2 = aubo_robot_namespace::InterfaceCallSuccCode;
+
+    // std::string s;
+    // ros::param::get("/aubo_driver/server_host", s); //The server_host should be corresponding to the robot controller setup.
+    server_host_ = (s=="")? "192.168.1.101" : s;
     std::cout<<"server_host:"<<server_host_<<std::endl;
 
     /** log in ***/
