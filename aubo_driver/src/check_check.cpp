@@ -116,12 +116,12 @@ int main(int argc, char **argv)
     // spinner.start();
 
     // ros::Rate loop_rate(robot_driver.UPDATE_RATE_);
-    // while(ros::ok())
-    // {
-    //     robot_driver.updateControlStatus();
-    //     loop_rate.sleep();
-    //     ros::spinOnce();
-    // }
+    while(ros::ok())
+    {
+        robot_driver.updateControlStatus();
+        loop_rate.sleep();
+        ros::spinOnce();
+    }
     // ROS_WARN("Exiting robot_driver");
     return(0);
 }
