@@ -89,6 +89,7 @@ namespace aubo_driver
     {
         public:
             AuboDriver(int num);
+            AuboDriver(std::string, int num);
             ~AuboDriver();
             bool roadPointCompare(double *point1, double *point2);
 
@@ -100,6 +101,7 @@ namespace aubo_driver
             void updateControlStatus();
             void run();
             bool connectToRobotController();
+            bool connectToRobotController(std::string s);
             bool setIO(aubo_msgs::SetIORequest& req, aubo_msgs::SetIOResponse& resp);
             bool getFK(aubo_msgs::GetFKRequest& req, aubo_msgs::GetFKResponse& resp);
             bool getIK(aubo_msgs::GetIKRequest& req, aubo_msgs::GetIKResponse& resp);
